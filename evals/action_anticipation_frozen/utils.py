@@ -13,7 +13,9 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 
-def init_opt(classifiers, iterations_per_epoch, opt_kwargs, num_epochs, use_bfloat16=False):
+def init_opt(
+    classifiers, iterations_per_epoch, opt_kwargs, num_epochs, use_bfloat16=False
+):
     optimizers, schedulers, wd_schedulers, scalers = [], [], [], []
     for c, kwargs in zip(classifiers, opt_kwargs):
         param_groups = [
@@ -29,14 +31,21 @@ def init_opt(classifiers, iterations_per_epoch, opt_kwargs, num_epochs, use_bflo
         ]
         logger.info("Using AdamW")
         optimizers += [torch.optim.AdamW(param_groups)]
-        schedulers += [WarmupCosineLRSchedule(optimizers[-1], T_max=int(num_epochs * iterations_per_epoch))]
-        wd_schedulers += [CosineWDSchedule(optimizers[-1], T_max=int(num_epochs * iterations_per_epoch))]
+        schedulers += [
+            WarmupCosineLRSchedule(
+                optimizers[-1], T_max=int(num_epochs * iterations_per_epoch)
+            )
+        ]
+        wd_schedulers += [
+            CosineWDSchedule(
+                optimizers[-1], T_max=int(num_epochs * iterations_per_epoch)
+            )
+        ]
         scalers += [torch.cuda.amp.GradScaler() if use_bfloat16 else None]
     return optimizers, scalers, schedulers, wd_schedulers
 
 
 class WarmupCosineLRSchedule(object):
-
     def __init__(self, optimizer, T_max, last_epoch=-1):
         self.optimizer = optimizer
         self.T_max = T_max
@@ -58,13 +67,24 @@ class WarmupCosineLRSchedule(object):
                 progress = float(self._step - warmup_steps) / float(max(1, T_max))
                 new_lr = max(
                     final_lr,
-                    final_lr + (ref_lr - final_lr) * 0.5 * (1.0 + math.cos(math.pi * progress)),
+                    final_lr
+                    + (ref_lr - final_lr) * 0.5 * (1.0 + math.cos(math.pi * progress)),
                 )
             group["lr"] = new_lr
 
+    def state_dict(self):
+        return {"_step": self._step}
+
+    def load_state_dict(self, state):
+        saved_step = state.get("_step", 0)
+        if saved_step > 0:
+            self._step = saved_step - 1
+            self.step()
+        else:
+            self._step = 0
+
 
 class CosineWDSchedule(object):
-
     def __init__(self, optimizer, T_max):
         self.optimizer = optimizer
         self.T_max = T_max
@@ -77,9 +97,22 @@ class CosineWDSchedule(object):
         for group in self.optimizer.param_groups:
             ref_wd = group.get("mc_ref_wd")
             final_wd = group.get("mc_final_wd")
-            new_wd = final_wd + (ref_wd - final_wd) * 0.5 * (1.0 + math.cos(math.pi * progress))
+            new_wd = final_wd + (ref_wd - final_wd) * 0.5 * (
+                1.0 + math.cos(math.pi * progress)
+            )
             if final_wd <= ref_wd:
                 new_wd = max(final_wd, new_wd)
             else:
                 new_wd = min(final_wd, new_wd)
             group["weight_decay"] = new_wd
+
+    def state_dict(self):
+        return {"_step": self._step}
+
+    def load_state_dict(self, state):
+        saved_step = state.get("_step", 0)
+        if saved_step > 0:
+            self._step = saved_step - 1
+            self.step()
+        else:
+            self._step = 0
